@@ -52,7 +52,7 @@
 
 #### 2.3 获取所有的音乐排行榜的接口
 
-[http://www.kuwo.cn/api/www/bang/bang/bangMenu ](http://www.kuwo.cn/api/www/bang/bang/bangMenu) 找到这个接口优点巧合
+[http://www.kuwo.cn/api/www/bang/bang/bangMenu ](http://www.kuwo.cn/api/www/bang/bang/bangMenu) 找到这个接口有点巧合
 
 这个接口里面的`sourceid`就对应了`bangid`值
 
