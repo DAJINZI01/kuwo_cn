@@ -60,7 +60,7 @@
 
 来一张图
 
-<img src="images\bang_menu.png" alt="音乐榜单信息" style="zoom: 80%;" />
+<img src="images/bang_menu.png" alt="音乐榜单信息" style="zoom: 80%;" />
 
 从这里，我们可以算一下，如果每一个**子榜单**下载前**30首歌**那么一会下载的歌曲数目为：
 
