@@ -1,9 +1,9 @@
 # coding=utf-8
+from gevent import monkey; monkey.patch_all()
+from gevent import pool
 # 下面这个模块是给mp3文件添加标签的，如：图片，作者，流派，还有歌词（歌词添加好像没用）什么的
 from mutagen.id3 import APIC, TIT2, TPE1, TPE2, TALB, SYLT, TDRC, TCON, TRCK
 from mutagen.mp3 import MP3
-
-from threading import Thread
 
 import requests
 import os
@@ -20,7 +20,7 @@ __author__ = "winner"
 BASE_DIR = "./data"
 if not os.path.exists(BASE_DIR):
     os.mkdir(BASE_DIR)
-
+# mp3下载线程数
 MP3_DOWNLOAD_THREAD_NUM = 10
 
 class KuwoCn(object):
@@ -50,13 +50,15 @@ class KuwoCn(object):
         }
         # 多线程支持
         self.mp3_q = queue.Queue()
+        # gevent
+        self.pool1 = pool.Pool()
+        self.pool2 = pool.Pool()
         # 自己的代理池
         self.proxies = [
+            {'http': '116.114.19.204:443'},
             {'http': '101.231.104.82:80'},
             {'http': '116.114.19.211:443'},
-            {'http': '116.114.19.204:443'},
-            {'http': '47.99.145.67:808'},
-            {'http': '185.186.77.115:80'},
+            {'http': '84.17.47.190:80'},
         ]
         # 日志文件名
         # self.log_file_name = log_file_name
@@ -76,18 +78,13 @@ class KuwoCn(object):
     def my_get(self, url, stream=False):
         """自定义的请求函数，可以打印一些信息，和处理反爬"""
         response = requests.get(url, headers=self.headers, stream=stream)
-        proxies = None
         while response.status_code != 200:
-            proxies = random.choice(self.proxies)
+            time.sleep(1)
             try:
-                response = requests.get(url, headers=self.headers, proxies=proxies, stream=stream, timeout=10)
+                response = requests.get(url, headers=self.headers, stream=stream)
             except:
                 pass
-        print("{} [{}]".format(response.url, response.status_code))
-        if proxies:
-            msg = "use proxies {} successfully.".format(proxies)
-            self.my_log(msg)
-            print(msg)
+        # print("{} [{}]".format(response.url, response.status_code))
         return response
 
     def search_music_by_keyword(self, key):
@@ -133,19 +130,22 @@ class KuwoCn(object):
     def get_song_lyric(self, musicid):
         """
         根据 musicid 也就是 rid 获取歌词信息
+        主要的接口数据:
+        {"data":{"lrclist":[{"time":"0.0","lineLyric":"不分手的恋爱 - 汪苏泷"}, "songinfo":{}
         返回值 [(text, time)]
         """
-        lyric =  self.my_get(self.song_lyric.format(musicid)).json()["data"]["lrclist"]
-        # 经过测试，如果访问的太快会出现空的歌词    
+        time.sleep(random.randint(3, 7)) # 访问太快，会出现500的错误
+        data =  self.my_get(self.song_lyric.format(musicid)).json()["data"]
+        lrclist = []
+        # {"data":null,"msg":"音乐查询失败","msgs":null,"profileid":"site","reqid":"081bc8bcXb67bX476aXa742X277424d2de4d","status":301}
+        if data:
+            lrclist = data["lrclist"] if data["lrclist"] else []
         lyric_filter = []
-        try:
-            for item in lyric:
-                lyric_filter.append((item["lineLyric"], int(float(item["time"])*1000)))
-        except:
-            print(lyric, "音乐id")
+        for item in lrclist:
+            lyric_filter.append((item["lineLyric"], int(float(item["time"])*1000)))        
         return lyric_filter
 
-    def get_bang_menu(self):
+    def get_bang_menu_list(self):
         """
         获取所有的音乐榜单信息
         经过筛选后的数据格式
@@ -165,22 +165,32 @@ class KuwoCn(object):
         """
         return self.my_get(self.host+self.bang_menu).json()["data"]
 
+    def get_bang_menu_by_name(self, name):
+        """
+        通过名字获取一个总的榜单
+        """
+        bang_menu_list = self.get_bang_menu_list()
+        for bang_menu in bang_menu_list:
+            if bang_menu["name"].find(name) != -1:
+                return bang_menu
+        return {}
+
     def get_bang_by_name(self, name):
         """
         通过名字获取榜单，返回榜单中包含给定的名字的榜单
         """
-        bang_menu = self.get_bang_menu()
-        for bang in bang_menu:
-            for sub_bang in bang["list"]:
-                if sub_bang["name"].find(name):
-                    return sub_bang
+        bang_menu_list = self.get_bang_menu_list()
+        for bang_menu in bang_menu_list:
+            for bang in bang_menu["list"]:
+                if bang["name"].find(name) != -1:
+                    return bang
         return {}
 
     def get_music_list(self, bangid, pn=1, rn=30):
         """
         根据榜单bangid, 获取音乐列表
         经过筛选后的数据格式
-        num: "300"
+        num: "300" 这个榜单的总的歌词的数量，可以依据这个实现榜单所有歌词的爬取
         pub: "2020-03-13"
         musicList: [{musicrid: "MUSIC_80488731", artist: "阿冗", trend: "u0",…},…]
         """
@@ -194,6 +204,8 @@ class KuwoCn(object):
         url: "https://sz-sycdn.kuwo.cn/d38d5a334ea880471d34fc5ca17cf9af/5e6ae940/resource/n1/68/38/37304574.mp3"
         """
         mp3_url = self.my_get(self.host+self.mp3_url.format(rid)).json()["url"]
+        while not mp3_url:
+            mp3_url = self.my_get(self.host+self.mp3_url.format(rid)).json()["url"]
         return mp3_url
 
     def set_mp3_headers(self, full_file_name, item):
@@ -296,7 +308,7 @@ class KuwoCn(object):
             download_size += f.write(chunk)
             # 显示到屏幕的下载信息
             print("\rdownload %s %s ... %.2fM/%.2fM" %
-                  (file_name, download_symbol[s], download_size/1024/1024, file_size), end="")
+                (file_name, download_symbol[s], download_size/1024/1024, file_size), end="")
             s = (s+1) % s_l
         f.close()
         print("\tok.")
@@ -345,12 +357,9 @@ class KuwoCn(object):
         if not os.path.exists(bang_dir):
             os.mkdir(bang_dir)
         # 根据 MP3_DOWNLOAD_THREAD_NUM 创建线程
-        mp3_download_thread_list = []
         for _ in range(MP3_DOWNLOAD_THREAD_NUM):
-            t = Thread(target=self.__download_mp3_and_lyric_multithread, 
-                        args=("{}/{}".format(folder, bang["name"]),))
-            t.start()
-            mp3_download_thread_list.append(t)
+            self.pool1.apply_async(func=self.__download_mp3_and_lyric_multithread, 
+                    args=("{}/{}".format(folder, bang["name"]),))
         # 统计开始时间
         start_time = time.time()
 
@@ -372,56 +381,62 @@ class KuwoCn(object):
                 self.mp3_q.put(music)
         # 等待线程结束
         self.mp3_q.join() # 等待队列为空
-        for t in mp3_download_thread_list:
-            t.join()
+        # for t in mp3_download_thread_list:
+            # t.join()
+        self.pool1.join()
         # 统计用时
         use_time = time.time() - start_time
-        msg = "download one bang %s use time %.2fs = %.2fm = %.2fh" % (folder, use_time, use_time/60, use_time/3600)
+        msg = "download one bang %s use time %.2fs = %.2fm = %.2fh" % (bang["name"], use_time, use_time/60, use_time/3600)
         self.my_log(msg)
         print(msg)
             
-    def download_mp3_all_bang(self):
+    def download_mp3_by_bang_menu(self, bang_menu):
         """
-        下载所有榜单的音乐, 这个api由于想要使用多进程但是，还是用线程
+        下载一个总榜单的音乐, 这个api由于想要使用多进程但是，还是用线程
         """
-        bang_menu_list = self.get_bang_menu()
-        # 总榜单线程
-        bang_thread_list = [] # 因为后面要等待线程结束 join
+        # 创建总榜单文件夹
+        bang_menu_folder = "{}/{}".format(BASE_DIR, bang_menu["name"])
+        if not os.path.exists(bang_menu_folder):
+            os.mkdir(bang_menu_folder)
         # 统计开始时间
         start_time = time.time()
-        for bang_menu in bang_menu_list:
-            # 1. 创建文件夹
-            bang_folder = "{}/{}".format(BASE_DIR, bang_menu["name"])
-            if not os.path.exists(bang_folder):
-                os.mkdir(bang_folder)
-            # 2. 下载单个榜单
-            for bang in bang_menu["list"]:
-                t = Thread(target=self.download_mp3_by_bang_multithread, args=(bang_menu["name"], bang))
-                t.start()
-                bang_thread_list.append(t)
-        # 等待线程结束
-        for t in bang_thread_list:
-            t.join()
+        for bang in bang_menu["list"]:
+            self.download_mp3_by_bang_multithread(bang_menu["name"], bang)
         # 统计用时
         use_time = time.time() - start_time
-        msg = "download all bang use time %.2fs = %.2fm = %.2fh" % (use_time, use_time/60, use_time/3600)
+        msg = "download bang menu %s use time %.2fs = %.2fm = %.2fh" % (bang_menu["name"], use_time, use_time/60, use_time/3600)
         self.my_log(msg)
         print(msg)
 
+    def download_mp3_all(self):
+        # 下载所有的总榜
+        start_time = time.time()
+        bang_menu_list = self.get_bang_menu_list()
+        for bang_menu in bang_menu_list:
+            self.pool2.apply_async(func=self.download_mp3_by_bang_menu, args=(bang_menu,))
+        self.pool2.join()
+        use_time = time.time() - start_time
+        self.my_log("ues total time: %.2fs = %.2fm = %.2fh" % (use_time, use_time/60, use_time/3600))
 
 if __name__ == "__main__":
     kuwo = KuwoCn()
     # kuwo.download_mp3_by_keyworld("冬眠")
-    # item = kuwo.search_music_by_keyword("不分手的恋爱")
-    # music_info = kuwo.get_music_info(item["rid"])
+    # item = kuwo.search_music_by_keyword("不分手的恋爱") # rid 945320
+    # music_info = kuwo.get_music_info(67733609)
     # print(music_info)
-    # bang_menu = kuwo.get_bang_menu()
+    # bang_menu = kuwo.get_bang_menu_list()
     # print(bang_menu)
-    # bang = kuwo.get_bang_by_name("酷我飙升榜")
-    # kuwo.download_mp3_by_bang_multithread("国内榜单", bang)
+    # bang = kuwo.get_bang_by_name("酷我新歌榜")
+    # kuwo.download_mp3_by_bang_multithread("bang_test", bang)
     # lyric = kuwo.get_song_lyric(item["rid"])
     # print(lyric)
     # kuwo.download_lyric("key", item, lyric)
     # kuwo.set_mp3_headers("./data/key/冬眠.mp3", item)
     # kuwo.download_mp3_and_lyric("key", item)
-    kuwo.download_mp3_all_bang()
+    # bang_menu = kuwo.get_bang_menu_by_name("全球榜")
+    # print(bang_menu)
+    # kuwo.download_mp3_by_bang_menu(bang_menu)
+    # print(kuwo.my_get(kuwo.song_lyric.format(945320)).content.decode("utf-8")) # rid 67733609
+    kuwo.download_mp3_all()
+
+    
